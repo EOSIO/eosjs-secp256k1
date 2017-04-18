@@ -1,0 +1,167 @@
+#!/bin/bash
+
+# C functions to export to Javascript
+EXPORTS=(   secp256k1_context_create \
+            secp256k1_context_destroy \
+            secp256k1_ecdsa_recover_compact \
+            secp256k1_ecdsa_sign_compact \
+            secp256k1_ec_pubkey_create \
+            secp256k1_ec_seckey_verify \
+            secp256k1_scalar_set_b32 \
+        )
+
+# Flags to pass to final emcc compilation to Javascript (for RELEASE or DEBUG builds)
+# Set DEBUG environment variable to 1 to enable DEBUG builds (RELEASE build is default).
+RELEASE_FLAGS="-O3 --memory-init-file 0 --closure 1" # Add --minify 0 to debug Closure renaming issues
+DEBUG_FLAGS="-g --memory-init-file 0 --closure 0 -s ASSERTIONS=1"
+
+TARGET_SCRIPT_NAME="libsecp256k1.js"
+GLUE_SCRIPT_NAME="glue.js"
+INNER_BUILD_DIR_NAME="secp256k1-build"
+
+#########################################
+
+COL=`tput setaf 2` # Green
+ERR=`tput setaf 1` # Red
+NC=`tput sgr0` # No Color
+
+
+if [ "$#" -lt "2" ]
+then
+    echo "Usage: $0 <src_dir> <secp256k1_src_dir> [arguments_passed_to_configure]..."
+    exit 1
+fi
+
+# Get relevant directories
+SOURCE_DIR=`readlink -f $1`
+SECP256K1_SOURCE_DIR=`readlink -f $2`
+BUILD_DIR=`pwd`
+INNER_BUILD_DIR="${BUILD_DIR}/${INNER_BUILD_DIR_NAME}"
+shift
+shift 
+
+# Make sure glue script exist at source directory
+GLUE_SCRIPT="${SOURCE_DIR}/${GLUE_SCRIPT_NAME}"
+if ! [ -e "${GLUE_SCRIPT}" ]
+then
+    echo "${ERR}Cannot find glue script at \"${GLUE_SCRIPT}\""
+    exit 2
+fi
+
+# Check if emscripten is available
+if ! [ -x "$(command -v emcc)"  ]
+then
+    echo "${ERR}You need to install and activate the Emscripten SDK first.${NC}"
+    echo "${ERR}Also, make sure it is in your PATH by sourcing \"emsdk_env.sh\"${NC}"
+    exit 3
+fi
+
+# Set DEBUG to 0 if it is unset or the empty string
+: ${DEBUG:=0}
+
+# Set appropriate flags for emcc compile
+if [ "$DEBUG" -eq "1" ]
+then
+    EMCC_DEBUG=1 
+    FINAL_PASS_FLAGS="$DEBUG_FLAGS"
+    PASS_TO_CONFIGURE=""
+else
+    EMCC_DEBUG=0
+    FINAL_PASS_FLAGS="$RELEASE_FLAGS"
+    PASS_TO_CONFIGURE=""
+fi
+EMCC_CFLAGS="-Wno-warn-absolute-paths" # Not working for some reason
+ENVIRONMENT_EXPORT_COMMANDS="export EMMAKEN_CFLAGS=\"${EMCC_CFLAGS}\"; export EMCC_DEBUG=${EMCC_DEBUG}"
+
+# Run autogen.sh in secp256k1 source directory if necessary
+if [ ! -e "${SECP256K1_SOURCE_DIR}/configure" ]
+then
+    echo "${COL}Need to first run autogen.sh in \"${SECP256K1_SOURCE_DIR}\"${NC}"
+    echo "${COL}Entering \"${SECP256K1_SOURCE_DIR}\"${NC}"
+    cd ${SECP256K1_SOURCE_DIR}
+    ./autogen.sh
+    echo "${COL}Existing \"${SECP256K1_SOURCE_DIR}\"${NC}"
+    cd ${BUILD_DIR}
+    if [ -e "${INNER_BUILD_DIR}/Makefile" ]
+    then
+        echo "${COL}Removing \"${BUILD_DIR}/Makefile\"${NC}"
+        rm -f "{BUILD_DIR}/Makefile"
+    fi
+    echo ""
+fi
+
+# Run configure (using emconfigure) on inner build if necessary.
+# Determines if necessary by the presence of Makefile in the inner build folder.
+# Note that make clean in outer build folder will not remove the Makefile from the inner build folder.
+# To properly clean so that running configure on outer build folder re-runs configure on inner build folder, use make veryclean.
+if [ -e "${INNER_BUILD_DIR}/Makefile" ]
+then
+    echo "${COL}\"${BUILD_DIR}/Makefile\" already exists${NC}"
+    echo "${COL}Will not run configure on \"${SECP256K1_SOURCE_DIR}\"${NC}"
+else
+    echo "${COL}Running configure on \"${SECP256K1_SOURCE_DIR}\"${NC}"
+    mkdir -p "${INNER_BUILD_DIR}"
+    echo "${COL}Entering \"${INNER_BUILD_DIR}\"${NC}"
+    cd "${INNER_BUILD_DIR}"
+    export CFLAGS="-I ${INNER_BUILD_DIR}/src"
+    emconfigure "${SECP256K1_SOURCE_DIR}/configure" ${PASS_TO_CONFIGURE} --with-field=32bit --with-scalar=32bit --with-bignum=no --with-asm=no --enable-tests=no "$@"
+    rm -f a.out a.out.js
+    echo "${COL}Exiting \"${INNER_BUILD_DIR}\"${NC}"
+    cd ${BUILD_DIR}
+    echo "${COL}Done with configure on \"${SECP256K1_SOURCE_DIR}\"${NC}" 
+fi
+echo ""
+
+# Generate EXPORTED_FUNCTIONS list to be used by final emcc compilation to Javascript
+EXPORT_TEXT="'["
+NUM_EXPORTS=${#EXPORTS[@]}
+FIRST_ITEM=1
+for ((i=0; i < $NUM_EXPORTS; i++))
+do
+    FUNC_NAME=$(echo "${EXPORTS[$i]}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    if [ "x${FUNC_NAME}" == "x" ]
+    then
+        continue
+    fi
+    if [ "${FIRST_ITEM}" -ne "1" ]
+    then
+        EXPORT_TEXT+=","
+    fi
+    EXPORT_TEXT+="\"_$FUNC_NAME\""
+    FIRST_ITEM=0
+done
+EXPORT_TEXT+="]'"
+
+# Write outer Makefile
+MAKEFILE="${BUILD_DIR}/Makefile"
+echo "${COL}Writing Makefile to \"${MAKEFILE}\"${NC}"
+if [ -e  "${INNER_BUILD_DIR_NAME}/src/libsecp256k1_la-secp256k1.o" ]
+then
+    touch "${INNER_BUILD_DIR_NAME}/src/libsecp256k1_la-secp256k1.o"
+fi
+cat >Makefile <<EOL
+.PHONY: default all install clean veryclean
+
+default: install
+
+all: ${TARGET_SCRIPT_NAME}
+
+install: all
+	-cp "${TARGET_SCRIPT_NAME}" "${SOURCE_DIR}/${TARGET_SCRIPT_NAME}"
+
+${TARGET_SCRIPT_NAME}: ${INNER_BUILD_DIR_NAME}/src/libsecp256k1_la-secp256k1.o ${GLUE_SCRIPT}
+	emcc "${INNER_BUILD_DIR}/src/libsecp256k1_la-secp256k1.o" -o ${TARGET_SCRIPT_NAME} --pre-js "${GLUE_SCRIPT}" ${FINAL_PASS_FLAGS} -s NO_EXIT_RUNTIME=1 -s EXPORTED_FUNCTIONS=${EXPORT_TEXT}
+
+${INNER_BUILD_DIR_NAME}/src/libsecp256k1_la-secp256k1.o: 
+	${ENVIRONMENT_EXPORT_COMMANDS}
+	emmake make -C "${INNER_BUILD_DIR}"
+
+clean:
+	make -C "${INNER_BUILD_DIR}" clean
+	-rm -f ${TARGET_SCRIPT_NAME} ${TARGET_SCRIPT_NAME}.mem
+
+veryclean: 
+	-rm -rf ${INNER_BUILD_DIR}
+	-rm -f ${TARGET_SCRIPT_NAME} ${TARGET_SCRIPT_NAME}.mem Makefile
+EOL
+
