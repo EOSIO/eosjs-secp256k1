@@ -1,0 +1,25 @@
+{
+    "name": "secp256k1-js",
+    "version": "1.0.0",
+    "license": "MIT",
+    "browser": "web.js",
+    "main": "node.js",
+    "author": "",
+    "scripts": {
+        "configure": "yarn docker emconfigure ./configure src secp256k1-build -- --with-bignum=no",
+        "make": "yarn docker emmake make",
+        "test": "yarn lint -- --quiet && mocha src/**/*.test.js",
+        "lint": "eslint src",
+        "docker": "docker run -e DEBUG=1 -v $(pwd):/src --rm -t secp256k1-js"
+    },
+    "dependencies": {
+        "create-hash": "^1.1.2",
+        "long": "^3.2.0",
+        "randombytes": "^2.0.3"
+    },
+    "devDependencies": {
+        "eslint": "^3.19.0",
+        "mocha": "^3.2.0",
+        "yarn": "^0.22.0"
+    }
+}

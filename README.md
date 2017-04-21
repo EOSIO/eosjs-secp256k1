@@ -1,18 +1,24 @@
-### CREDIT
+Compiles c++ secp256k1 implementation into JavaScript.
 
-https://github.com/arhag/crypto-experiments/tree/emscripten/emscripten/libsecp256k1-demo
+Currently this project focuses only on the pedersen blind transfer methods.  A
+from-scratch JavaScript implementation did not exist.
 
 ### BUILD
-
 ```bash
-docker run --rm -v $(pwd):/src -t secp256k1-js make veryclean
-git clone https://github.com/ElementsProject/secp256k1-zkp.git secp256k1-build
-cd secp256k1-build
-git checkout 8de5830
-cd -
-
+git submodule update --init --recursive
 docker build -t secp256k1-js .
-docker run --rm -v $(pwd):/src -t secp256k1-js emconfigure ./configure wrap secp256k1-build
-docker run --rm -v $(pwd):/src -t secp256k1-js emmake make
-firefox wrap/secp256k1-test.html
+yarn
+yarn configure
+yarn make
+yarn test
 ```
+
+### DEVELOPMENT
+```bash
+sudo chown -R $(whoami) .
+yarn make
+```
+
+### CREDIT
+- Build files and proof-of-concept
+- https://github.com/arhag/crypto-experiments/tree/emscripten/emscripten/libsecp256k1-demo

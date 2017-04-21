@@ -1,0 +1,7 @@
+src/libsecp256k1.js
+node_modules
+Makefile
+coverage
+build
+./test
+yarn-error.log
